@@ -1,0 +1,494 @@
+---
+title: "BSAN 750 | Final Project"
+author: "Loreta B, Janaina R"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+
+
+
+```{r}
+NFLdata <- read.csv("~/Downloads/football_train (1).csv")
+head(NFLdata)
+str(NFLdata)
+```
+```{r}
+sum(is.na(NFLdata))
+summary(NFLdata)
+```
+
+We run the summary statists above to check for missing values and potential outlier and found that considering transformations and scaling for better model performance would be a good next step, especially for variables with wide ranges or skewness. 
+
+```{r}
+library(GGally)
+selected_vars <- NFLdata[, c("Yards", "OffensivePlays", "TurnOversLost", "Wins")]
+ggpairs_plot <- ggpairs(selected_vars)
+print(ggpairs_plot)
+```
+The ggpairs plot indicates significant relationships between the variables, with Yards and TurnOversLost showing strong correlations with Wins. This suggests these variables could be important predictors in our model. The distributions and relationships look as expected, with no immediate concerns about non-linearity or problematic outliers. 
+ 
+### Removing rows with missing values
+```{r}
+NFLdata <- na.omit(NFLdata)
+```
+
+### Running model 1: All predictors 
+```{r}
+m1 <- lm(Wins ~., data = NFLdata)
+summary(m1)
+# Calculate R-Squared and RMSE
+predicted_values <- predict(m1, newdata = NFLdata)
+actual_values <- NFLdata$Wins
+rsquared <- summary(m1)$r.squared
+rmse <- sqrt(mean((actual_values - predicted_values)^2))
+rsquared
+rmse
+par(mfrow = c(1, 2))
+plot(m1, which = 1)
+plot(m1, which = 2)
+```
+The 'Fitted vs. Residuals' plot suggests that there may be a non-linear relationship between the variables. The 'QQ-plot' indicates that the residuals are approximately normally distributed, with some deviations noticeable before the -1 X range and beyond the +2 X range. Also, the VIF results indicates For this reason we will run the model 2
+### Running model 2: 
+```{r}
+library(car)
+library(dplyr)
+variables_to_exclude <- c("InterceptionsThrown", "YardsGainedRushing")
+NFLdata_filtered <- NFLdata[, !(names(NFLdata) %in% variables_to_exclude)]
+model_formula <- Wins ~ OffensivePlays + TurnOversLost + FirstDowns + YardsGainedPassing + 
+                 RushingAttempts + OppOffensivePlays + OppTurnOversLost + 
+                 OppPassesCompleted + OppRushingAttempts
+m2 <- lm(model_formula, data = NFLdata_filtered)
+vif_results <- vif(m2)
+print(vif_results)
+m2_summary <- summary(m2)
+print(m2_summary)
+r_squared_m2 <- m2_summary$r.squared
+print(paste("R-squared for Model 2:", r_squared_m2))
+residuals_m2 <- residuals(m2)
+rmse_m2 <- sqrt(mean(residuals_m2^2))
+print(paste("RMSE for Model 2:", rmse_m2))
+par(mfrow = c(1, 2))
+plot(m2, which = 1)
+plot(m2, which = 2)
+```
+_Actions taken in the chunk above:In the preceding section, we took the following actions: we excluded variables with missing data (NAs), fitted the new model, checked for multicollinearity, and stored the calculated R-Squared and RMSE values to be used later in the comparative models table_
+The Multiple R-squared value of 0.7746 indicates that the model explains approximately 77.46% of the variability in Wins, suggesting a strong fit. The model's F-statistic is significant (p < 2.2e-16), confirming its statistical significance. However, we still have variables that exhibit Variance Inflation Factors (VIF) above 5, indicating strong to high multicollinearity. Therefore, we plan to create a third model by excluding these variables.
+
+### Model 3
+```{r}
+library(car)
+library(dplyr)
+model_formula_new <- Wins ~ OffensivePlays + TurnOversLost + YardsGainedPassing + RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+m3 <- lm(model_formula_new, data = NFLdata)
+summary(m3)
+vif_m3 <- vif(m3)
+print("VIF for Model 3:")
+print(vif_m3)
+predicted_values_m3 <- predict(m3, newdata = NFLdata)
+actual_values_m3 <- NFLdata$Wins
+rsquared_m3 <- summary(m3)$r.squared
+cat("R-Squared for Model 3:", rsquared_m3, "\n")
+par(mfrow = c(1, 2))
+plot(m3, which = 1)
+plot(m3, which = 2)
+```
+_Actions taken in the chunk above: Addressing multicollinearity and testing new VIFs_
+The Multiple R-squared value is 0.7145, suggesting that about 71.45% of the variability in Wins is explained by the model. This is a strong fit and is very similar to the previous model.The Adjusted R-squared of 0.7091 indicates a good fit, considering the number of predictors.
+
+
+## Model 4: logistic model 
+```{r}
+library(dplyr)
+library(ROCR)
+NFLdata$SuccessfulSeason <- as.factor(NFLdata$Wins > median(NFLdata$Wins))
+m4 <- glm(SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                      RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts, 
+                      data = NFLdata, family = binomial())
+summary_logistic <- summary(m4)
+print(summary_logistic)
+pred <- predict(m4, type = "response")
+pred_obj <- prediction(pred, NFLdata$SuccessfulSeason)
+perf <- performance(pred_obj, "tpr", "fpr")
+auc_value <- performance(pred_obj, measure = "auc")@y.values[[1]]
+cat("AUC:", auc_value, "\n")
+
+# Calculate False Positive Rate (FPR), False Negative Rate (FNR), and Misclassification Rate (MR)
+threshold <- 0.5  # You can adjust the threshold as needed
+predicted_classes <- ifelse(pred >= threshold, 1, 0)
+actual_classes <- as.numeric(NFLdata$SuccessfulSeason) - 1  # Convert to 0 and 1
+confusion_matrix <- table(actual_classes, predicted_classes)
+fpr <- confusion_matrix[1, 2] / sum(confusion_matrix[1, ])
+fnr <- confusion_matrix[2, 1] / sum(confusion_matrix[2, ])
+mr <- (confusion_matrix[1, 2] + confusion_matrix[2, 1]) / sum(confusion_matrix)
+
+cat("False Positive Rate (FPR):", fpr, "\n")
+cat("False Negative Rate (FNR):", fnr, "\n")
+cat("Misclassification Rate (MR):", mr, "\n")
+
+
+# Plot ROC Curve
+plot(perf, colorize = TRUE, main = "ROC Curve")
+abline(a = 0, b = 1, col = "gray", lty = 2)
+
+```
+_Created a binary outcome variable, defined a season as successful if the team's number of wins is above the median; created a logistic regression model; generated a prediction object based on the model; defined the performance object for the true positive rate (TPR) and false positive rate (FPR); ran the AUC only to assess the goodness of fit for the successful/unsuccessful measure_ 
+The AUC of 0.9304 indicates that there is a 93.04% chance that the model will be able to distinguish between a successful season and an unsuccessful one.
+
+ 
+## STEPWISE 
+```{r}
+set.seed(1234)
+n <- nrow(NFLdata)
+index <- sample(n, 0.8 * n)
+train <- NFLdata[index, ]
+test <- NFLdata[-index, ]
+formula_full <- SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+initial_model <- glm(formula_full, data = train, family = binomial())
+library(MASS) 
+forward_model <- stepAIC(initial_model, direction = "forward")
+backward_model <- stepAIC(initial_model, direction = "backward")
+summary(forward_model)
+summary(backward_model)
+```
+## 1) Consolitaded Stepwise for the 4 models 
+```{r}
+library(MASS)  # for stepAIC
+library(dplyr)
+set.seed(1234)
+
+# Model 1: Full Linear Model
+m1 <- lm(Wins ~., data = NFLdata)
+stepwise_m1 <- stepAIC(m1, direction = "both")
+summary(stepwise_m1)
+
+# Model 2: Linear Model with Selected Predictors
+model_formula <- Wins ~ OffensivePlays + TurnOversLost + FirstDowns + YardsGainedPassing + RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppPassesCompleted + OppRushingAttempts
+m2 <- lm(model_formula, data = NFLdata)
+stepwise_m2 <- stepAIC(m2, direction = "both")
+summary(stepwise_m2)
+
+# Model 3: Linear Model with Updated Predictor Set
+model_formula_new <- Wins ~ OffensivePlays + TurnOversLost + YardsGainedPassing + RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+m3 <- lm(model_formula_new, data = NFLdata)
+stepwise_m3 <- stepAIC(m3, direction = "both")
+summary(stepwise_m3)
+
+# Model 4: Logistic Regression Model
+logistic_model <- glm(SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                      RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts, 
+                      data = NFLdata, family = binomial())
+stepwise_m4 <- stepAIC(logistic_model, direction = "both")
+summary(stepwise_m4)
+```
+### LASSO
+```{r}
+library(caret)
+library(glmnet)
+set.seed(1234)
+n <- nrow(NFLdata)
+index <- sample(n, 0.8 * n)
+train <- NFLdata[index, ]
+test <- NFLdata[-index, ]
+x_matrix_train <- model.matrix(~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                               RushingAttempts + OppOffensivePlays + OppTurnOversLost + 
+                               OppRushingAttempts, train)[,-1] # Exclude the intercept and ID
+y_train <- train$Wins
+lasso_model <- glmnet(x_matrix_train, y_train, family = "gaussian", alpha = 1)
+cv_lasso <- cv.glmnet(x_matrix_train, y_train, family = "gaussian", alpha = 1)
+best_lambda <- cv_lasso$lambda.min
+print(paste("Best lambda for LASSO:", best_lambda))
+plot(cv_lasso)
+x_matrix_test <- model.matrix(~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                              RushingAttempts + OppOffensivePlays + OppTurnOversLost + 
+                              OppRushingAttempts, test)[,-1] # Test set matrix
+y_test <- test$Wins
+predictions_lasso <- predict(lasso_model, s = best_lambda, newx = x_matrix_test)
+rmse_test <- sqrt(mean((y_test - predictions_lasso)^2))
+print(paste("RMSE for Test Set:", rmse_test))
+SST <- sum((y_test - mean(y_test))^2)
+SSR <- sum((predictions_lasso - mean(y_test))^2)
+r_squared <- SSR / SST
+print(paste("R-squared for Test Set:", r_squared))
+
+```
+The data (NFLdata) is randomly partitioned into training and testing sets. The training set includes 80% of the data, while the remaining 20% is used for testing.
+Data Preparation: It prepares the predictor matrix (x_matrix_train) from the training data excluding the intercept and any ID column, and sets the response variable (y_train) as Wins.
+
+### Consolidate ROC and AUC for the 4 models 
+```{r}
+# Load the ROCR library
+library(ROCR)
+par(mfrow = c(2, 2))
+
+# Model 1 ROC Curve and AUC
+pred_m1 <- predict(m1, newdata = test, type = "response")
+pred_obj_m1 <- prediction(pred_m1, test$SuccessfulSeason)
+perf_m1 <- performance(pred_obj_m1, "tpr", "fpr")
+plot(perf_m1, colorize = TRUE, main = "Model 1")
+auc_m1 <- performance(pred_obj_m1, "auc")@y.values[[1]]
+print(paste("AUC for Model 1:", auc_m1))
+
+# Model 2 ROC Curve and AUC
+pred_m2 <- predict(m2, newdata = test, type = "response")
+pred_obj_m2 <- prediction(pred_m2, test$SuccessfulSeason)
+perf_m2 <- performance(pred_obj_m2, "tpr", "fpr")
+plot(perf_m2, colorize = TRUE, main = "Model 2")
+auc_m2 <- performance(pred_obj_m2, "auc")@y.values[[1]]
+print(paste("AUC for Model 2:", auc_m2))
+
+# Model 3 ROC Curve and AUC
+pred_m3 <- predict(m3, newdata = test, type = "response")
+pred_obj_m3 <- prediction(pred_m3, test$SuccessfulSeason)
+perf_m3 <- performance(pred_obj_m3, "tpr", "fpr")
+plot(perf_m3, colorize = TRUE, main = "Model 3")
+auc_m3 <- performance(pred_obj_m3, "auc")@y.values[[1]]
+print(paste("AUC for Model 3:", auc_m3))
+
+# Model 4 ROC Curve and AUC
+pred_m4 <- predict(logistic_model, newdata = test, type = "response")
+pred_obj_m4 <- prediction(pred_m4, test$SuccessfulSeason)
+perf_m4 <- performance(pred_obj_m4, "tpr", "fpr")
+plot(perf_m4, colorize = TRUE, main = "Model 4")
+auc_m4 <- performance(pred_obj_m4, "auc")@y.values[[1]]
+print(paste("AUC for Model 4:", auc_m4))
+par(mfrow = c(1, 1))
+
+
+
+
+```
+### Asymetric costs for model 4
+### Given that your logistic model is indeed a classification model, it's suitable for this analysis. However, the linear models (Models 1, 2, and 3) are regression models and do not directly apply to asymmetric cost analysis in the same way, as they predict continuous outcomes rather than binary classes.
+```{r}
+w_FP <- 1  
+w_FN <- 10
+pred_probs <- predict(logistic_model, newdata = test, type = "response")
+pcut <- 0.5
+predicted_classes <- ifelse(pred_probs > pcut, "TRUE", "FALSE")
+actual_classes <- test$SuccessfulSeason
+cost <- sum((actual_classes == "FALSE" & predicted_classes == "TRUE") * w_FP +
+            (actual_classes == "TRUE" & predicted_classes == "FALSE") * w_FN)
+
+print(paste("Asymmetric Cost:", cost))
+```
+
+### MODEL COMPARISON
+
+```{r}
+
+AUC_M1 <- 1.0  # AUC for Model 1
+AUC_M2 <- 0.964874551971326  # AUC for Model 2
+AUC_M3 <- 0.9584229390681  # AUC for Model 3
+AUC_M4 <- 0.956989247311828  # AUC for Model 4 (Logistic Model)
+
+
+NumPredictors_M1 <- length(coef(m1))
+NumPredictors_M2 <- length(coef(m2))
+NumPredictors_M3 <- length(coef(m3))
+NumPredictors_M4 <- length(coef(logistic_model))
+
+AsymmetricCost_Logistic <- 45
+model_comparison <- data.frame(
+  Model = c("Model 1", "Model 2", "Model 3", "Model 4: Logistic Model"),
+  AUC = c(AUC_M1, AUC_M2, AUC_M3, AUC_M4),
+  NumberOfPredictors = c(NumPredictors_M1, NumPredictors_M2, NumPredictors_M3, NumPredictors_M4),
+  AsymmetricCost = c(NA, NA, NA, AsymmetricCost_Logistic)
+)
+
+print(model_comparison)
+```
+
+####
+
+
+```{r}
+# Model performance metrics
+# Replace these with your actual calculated values
+R_squared_M1 <- summary(m1)$r.squared
+Adjusted_R_squared_M1 <- summary(m1)$adj.r.squared
+AIC_M1 <- AIC(m1)
+BIC_M1 <- BIC(m1)
+RMSE_M1 <- sqrt(mean(residuals(m1)^2))
+
+R_squared_M2 <- summary(m2)$r.squared
+Adjusted_R_squared_M2 <- summary(m2)$adj.r.squared
+AIC_M2 <- AIC(m2)
+BIC_M2 <- BIC(m2)
+RMSE_M2 <- sqrt(mean(residuals(m2)^2))
+
+R_squared_M3 <- summary(m3)$r.squared
+Adjusted_R_squared_M3 <- summary(m3)$adj.r.squared
+AIC_M3 <- AIC(m3)
+BIC_M3 <- BIC(m3)
+RMSE_M3 <- sqrt(mean(residuals(m3)^2))
+
+# Assuming metrics for Model 4 are not available/uncalculated
+R_squared_M4 <- NA
+Adjusted_R_squared_M4 <- NA
+AIC_M4 <- NA
+BIC_M4 <- NA
+RMSE_M4 <- NA
+
+# AUC values for each model
+AUC_M1 <- 1.0  # AUC for Model 1
+AUC_M2 <- 0.964874551971326  # AUC for Model 2
+AUC_M3 <- 0.9584229390681  # AUC for Model 3
+AUC_M4 <- 0.956989247311828  # AUC for Model 4 (Logistic Model)
+
+# Create a data frame to consolidate model comparison metrics
+model_comparison <- data.frame(
+  ModelName = c("Model 1", "Model 2", "Model 3", "Model 4"),
+  ModelType = c("Linear Regression", "Linear Regression", "Linear Regression", "Logistic Regression"),
+  RMSE = c(RMSE_M1, RMSE_M2, RMSE_M3, RMSE_M4),
+  R_Squared = c(R_squared_M1, R_squared_M2, R_squared_M3, R_squared_M4),
+  Adjusted_R_Squared = c(Adjusted_R_squared_M1, Adjusted_R_squared_M2, Adjusted_R_squared_M3, Adjusted_R_squared_M4),
+  AIC = c(AIC_M1, AIC_M2, AIC_M3, AIC_M4),
+  BIC = c(BIC_M1, BIC_M2, BIC_M3, BIC_M4),
+  AUC = c(AUC_M1, AUC_M2, AUC_M3, AUC_M4)
+)
+
+# View the consolidated comparison
+print(model_comparison)
+
+```
+The Logistic Model shows a good balance, with the same number of predictors as Model 3 but a slightly lower AUC. As the goal is to minimize complexity while maintaining good performance, we will choose model 4
+
+
+## Running Cross-Validation for Model 4 (Logistic Regression Model): K-Fold Cross-Validation
+```{r}
+library(caret)
+control <- trainControl(method = "cv", number = 10)  # 10-fold cross-validation
+set.seed(1234)  # For reproducibility
+cv_model <- train(SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                 RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts, 
+                 data = NFLdata, method = "glm", family = "binomial", trControl = control)
+print(cv_model)
+
+```
+Model Overview
+Sample Size: The model was tested on a dataset with 380 samples.
+Predictors: It used 7 predictors for the analysis.
+Classes: The outcome variable is binary ('FALSE', 'TRUE'), indicating a classification problem.
+Cross-Validation Technique
+10-Fold Cross-Validation: This technique involves partitioning the data into 10 subsets. The model is trained on 9 subsets and tested on the remaining subset. This process is repeated 10 times, each time with a different subset as the test set.
+Sample Sizes in Folds: Each fold roughly had between 341 to 342 samples for training.
+Performance Metrics
+Accuracy (0.8311759): This value indicates that the model correctly predicts the outcome approximately 83.12% of the time. This is a high accuracy rate, suggesting that the model performs well in classifying the samples into 'FALSE' or 'TRUE' categories.
+
+Kappa (0.661359): The Kappa statistic is a measure of the agreement between the predicted and observed categorizations of a dataset, correcting for agreement that occurs by chance. A Kappa value of 0.6614 suggests substantial agreement, indicating that the model's predictions are reliable beyond what would be expected just by chance. It's a good indicator of the model's predictive power, especially in balanced datasets where accuracy alone might be misleading.
+
+Interpretation and Considerations: The model exhibits strong predictive performance in terms of both accuracy and Kappa.
+
+### CART for Model 4
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(rpart)
+library(rpart.plot)
+
+# Setting the seed for reproducibility
+set.seed(1234)
+
+# Splitting the dataset into training and testing sets
+split <- createDataPartition(NFLdata$SuccessfulSeason, p = 0.8, list = FALSE)
+train <- NFLdata[split, ]
+test <- NFLdata[-split, ]
+
+# Checking the distribution of the outcome variable in the training and test sets
+table(train$SuccessfulSeason)
+table(test$SuccessfulSeason)
+
+# CART model formula
+formula_cart <- SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+
+# Building the CART model
+cart_model <- rpart(formula_cart, data = train, method = "class", cp = 0.001)  
+summary(cart_model)
+
+# Plotting the CART model
+prp(cart_model, type = 4, extra = 101, digits = 4)
+```
+### Finetune of CART model - prunning the tree 
+
+```{r}
+# Load necessary libraries
+library(rpart)
+library(rpart.plot)
+library(caret)
+
+# Setting the seed for reproducibility
+set.seed(1234)
+
+# Splitting the dataset into training and testing sets
+split <- createDataPartition(NFLdata$SuccessfulSeason, p = 0.8, list = FALSE)
+train <- NFLdata[split, ]
+test <- NFLdata[-split, ]
+
+# CART model formula
+formula_cart <- SuccessfulSeason ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+                RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+
+# Full CART model without pruning
+cart_model_full <- rpart(formula_cart, data = train, method = "class", control = rpart.control(cp = -1))
+
+# Cross-validation to find the optimal cp
+cv_cart <- rpart::rpart.control(cp = -1)  
+cv_results <- rpart(formula_cart, data = train, method = "class", xval = 10, control = cv_cart)
+
+# Manually adjusting the cp value for more pruning
+# You can adjust this value based on your preference for tree complexity
+manual_cp <- 0.01 # This value is higher than the optimal_cp
+
+# Pruning the CART model using the manually adjusted cp
+pruned_cart <- prune(cart_model_full, cp = manual_cp)
+
+# Predicting on test data and evaluating the model
+predictions <- predict(pruned_cart, newdata = test, type = "class")
+confusion_matrix <- confusionMatrix(predictions, test$SuccessfulSeason)
+
+# Output results
+print(confusion_matrix)
+summary(pruned_cart)
+prp(pruned_cart, type = 4, extra = 101, digits = 4)
+
+
+```
+### ADITTIONAL MACHINE LEARNING - SVR - Support vector machine 
+
+```{r}
+# Load necessary libraries
+library(e1071)
+library(caret)
+
+# Setting the seed for reproducibility
+set.seed(1234)
+
+# Splitting the dataset into training and testing sets
+split <- createDataPartition(NFLdata$Wins, p = 0.8, list = FALSE)
+train <- NFLdata[split, ]
+test <- NFLdata[-split, ]
+
+# Define the formula for regression
+formula_svr <- Wins ~ OffensivePlays + TurnOversLost + YardsGainedPassing + 
+               RushingAttempts + OppOffensivePlays + OppTurnOversLost + OppRushingAttempts
+
+# Train the SVM model for regression
+svr_model <- svm(formula_svr, data = train, type = "eps-regression")
+
+# Predict on the test set
+predictions_svr <- predict(svr_model, newdata = test)
+
+# Evaluate the model
+rmse_svr <- RMSE(predictions_svr, test$Wins)
+rsq_svr <- R2(predictions_svr, test$Wins)
+
+# Output results
+print(list(RMSE = rmse_svr, R_squared = rsq_svr))
+
+```
+
